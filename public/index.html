@@ -5,7 +5,7 @@
 </head>
 <body>
 
-<video id="localVideo" autoplay muted></video>
+<video id="localVideo" autoplay muted style="width:400px;"></video>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
@@ -18,31 +18,55 @@ navigator.mediaDevices.getUserMedia({ video: true, audio: true })
     const video = document.getElementById('localVideo');
     video.srcObject = stream;
 
+    // Check codec support (IMPORTANT)
+    const mimeType = 'video/webm; codecs=vp8,opus';
+
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      console.warn('⚠️ Codec not supported, falling back to default webm');
+    }
+
     const mediaRecorder = new MediaRecorder(stream, {
-      mimeType: 'video/webm; codecs=vp8,opus'
+      mimeType: MediaRecorder.isTypeSupported(mimeType) ? mimeType : 'video/webm'
     });
 
     mediaRecorder.ondataavailable = async (event) => {
 
-      if (event.data.size > 0) {
+      if (event.data && event.data.size > 0) {
 
-        // IMPORTANT FIX 🔥
-        const buffer = await event.data.arrayBuffer();
+        try {
+          const buffer = await event.data.arrayBuffer();
 
-        socket.emit('stream-data', buffer);
+          console.log('📦 Chunk size:', buffer.byteLength);
+
+          socket.emit('stream-data', buffer);
+
+        } catch (err) {
+          console.error('❌ Chunk conversion error:', err);
+        }
       }
     };
 
-    socket.emit('start-stream');
+    mediaRecorder.onerror = (err) => {
+      console.error('❌ MediaRecorder error:', err);
+    };
 
-    mediaRecorder.start(1000);
+    socket.on('connect', () => {
+      console.log('🟢 Connected to server');
+      socket.emit('start-stream');
+    });
+
+    mediaRecorder.start(1000); // 1 second chunks
 
     window.onbeforeunload = () => {
       mediaRecorder.stop();
       socket.emit('stop-stream');
     };
+
   })
-  .catch(console.error);
+  .catch((err) => {
+    console.error('❌ getUserMedia error:', err);
+  });
+
 </script>
 
 </body>
